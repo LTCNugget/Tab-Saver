@@ -1,12 +1,14 @@
 // js/background.js
+//var chrome; // for jshint
 
 var allTabs = {  },
 		workTree = {  };
 
-// constructor Workspace(String name[, object info = { array tabs, string parent }])
+// constructor Workspace(String name[, object info = { array of Tabs tabs, string parent }])
 function Workspace(name, info) {
 	this.launched = false;
 	this.name = name;
+	this.launchId = 0;
 	this.tabs = [  ];
 	if(info.tabs) {
 		for(var i = 0; i < info.tabs.length; i++) {
@@ -19,52 +21,60 @@ function Workspace(name, info) {
 		this.parent = "workTree";
 	}
 
-	this.updateTab = function(tabId) {
-		chrome.tabs.get(tabId, function(gotTab) {
-			for(var i in this.tabs) {
-				if(this.tabs[i].id === tabId) {
-					this.tabs[i] = gotTab;
-				}
-			}
-		});
-	};
-
 	this.save = function() {
+		var self = this;
 		chrome.storage.sync.set({
 			[this.parent]: {
 				[this.name]: this
 			}
 		}, function() {
 			if (!chrome.runtime.lastError) {
-				console.log(this.name + " successfully synced");
+				console.log(self.name + " successfully synced");
 			} else {
-				console.error(this.name + " did not sync");
-				console.log(chrome.runtime.lastError.message);
+				console.error(self.name + " did not sync: " + chrome.runtime.lastError.message);
 			}
 		});
 	};
 
-	// launch(object info)
+	// launch(object info = { [boolean incognito] })
 	this.launch = function(info) {
 		if(!this.launched) {
-			launchInfo = {
+			this.launched = true;
+			var launchInfo = {
 				url: [  ],
 				incognito: info.incognito
 			};
 			for(var i in this.tabs) {
 				launchInfo.url.push(this.tabs[i].url);
 			}
-			chrome.windows.create(launchInfo, function() {
-				console.log(this.name + " has been launched");
+			var self = this;
+			chrome.windows.create(launchInfo, function(windowCreated) {
+				console.log(self.name + " has been launched");
+				self.launchId = windowCreated.id;
+				chrome.windows.onRemoved.addListener(function wOnRemWatch(windowRemovedId) {
+					chrome.windows.onRemoved.removeListener(wOnRemWatch);
+					if(windowRemovedId === self.launchId) {
+						self.unLaunch();
+					}
+				});
+				return true;
 			});
 		} else {
 			console.warn(this.name + " is already launched");
+			return false;
 		}
+	};
+
+	this.unLaunch = function() {
+		this.launchId = 0;
+		this.launched = false;
+		return !this.launched && this.launchId === 0;
 	};
 
 	// addTab(Tab tab)
 	this.addTab = function(tab) {
 		this.tabs.push(tab);
+		return true;
 	};
 }
 
@@ -77,8 +87,7 @@ function clearStorage(confirm) {
 			if(!chrome.runtime.lastError) {
 				console.log("Storage cleared");
 			} else {
-				console.error("Storage was not cleared");
-				console.log(chrome.runtime.lastError.message);
+				console.error("Storage was not cleared: " + chrome.runtime.lastError.message);
 			}
 		});
 	}
@@ -86,44 +95,57 @@ function clearStorage(confirm) {
 
 // updateWindow(int windowId)
 function updateWindow(windowId) {
-	var perfA = performance.now();
-	if(allTabs[windowId]) {
+	//var perfA = performance.now();
+//	if(allTabs[windowId]) {
 		chrome.windows.get(windowId, { populate: true }, function(windowGot) {
-			allTabs[windowId] = windowGot;
+			if(windowGot !== undefined) {
+				allTabs[windowId] = windowGot;
+			} else {
+				delete allTabs[windowId];
+			}
+			if(chrome.runtime.lastError) {
+				console.error("Could not get window: " + chrome.runtime.lastError.message);
+				return false;
+			}
 		});
-	} else {
-		delete allTabs[windowId];
-	}
-	perfFin = performance.now() - perfA;
-	console.log("It took " + perfFin + " ms to updateWindow");
+//	} else {
+//		delete allTabs[windowId];
+//	}
+	//var perfFin = performance.now() - perfA;
+	//console.log("It took " + perfFin + " ms to updateWindow");
+	return true;
 }
 
 // updateTab(int tabId)
 function updateTab(tabId) {
-	var perfA = performance.now();
+	//var perfA = performance.now();
 	chrome.tabs.get(tabId, function(tabUpdated) {
-		allTabs[tabUpdated.windowId].tabs[tabUpdated.index] = tabUpdated;
+		if(!chrome.runtime.lastError) {
+			allTabs[tabUpdated.windowId].tabs[tabUpdated.index] = tabUpdated;
+		} else {
+			console.error("Could not get tab: " + chrome.runtime.lastError.message);
+			return false;
+		}
 	});
-	perfFin = performance.now() - perfA;
-	console.log("It took " + perfFin + " ms to updateTab");
+	//var perfFin = performance.now() - perfA;
+	//console.log("It took " + perfFin + " ms to updateTab");
+	return true;
 }
 
 //----- Start Functions -------------------------------------------------------
 
 chrome.storage.sync.get("workTree", function(items) {
-	workTree = items.workTree;
+	//workTree = items.workTree;
 	if(!chrome.runtime.lastError) {
 		console.log("Got workTree from storage");
 	} else {
-		console.error("Could not get sync storage");
-		console.log(chrome.runtime.lastError.message);
+		console.error("Could not get sync storage: " + chrome.runtime.lastError.message);
 	}
 	chrome.storage.sync.getBytesInUse(null, function(bytesInUse) {
 		if(!chrome.runtime.lastError) {
 			console.log(bytesInUse + " bytes are being used");
 		} else {
-			console.error("Could not get bytes in use");
-			console.log(chrome.runtime.lastError.message);
+			console.error("Could not get bytes in use: " + chrome.runtime.lastError.message);
 		}
 	});
 });
@@ -174,4 +196,17 @@ chrome.tabs.onDetached.addListener(function tOnDet(tabDetachedId, tabDetachedInf
 
 chrome.tabs.onRemoved.addListener(function tOnRem(tabRemovedId, tabRemovedInfo) {
 	updateWindow(tabRemovedInfo.windowId);
+});
+
+//----- Testing ---------------------------------------------------------------
+
+workTree.workspace1 = new Workspace("Workspace 1", {
+	tabs: [
+		{ url: "https://google.com/" },
+		{ url: "https://github.com/" }
+	]
+});
+
+chrome.tabs.create({
+	url: "html/popup.html"
 });
